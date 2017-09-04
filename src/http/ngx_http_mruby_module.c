@@ -18,6 +18,7 @@
 #include <mruby/array.h>
 #include <mruby/compile.h>
 #include <mruby/data.h>
+#include <mruby/opcode.h>
 #include <mruby/proc.h>
 #include <mruby/string.h>
 #include <mruby/value.h>
@@ -833,7 +834,19 @@ ngx_int_t ngx_mrb_run(ngx_http_request_t *r, ngx_mrb_state_t *state, ngx_mrb_cod
       return rc;
     }
   }
-  mrb_result = mrb_run(state->mrb, code->proc, mrb_top_self(state->mrb));
+
+  // Prepare proc
+  // A part of them refer to https://github.com/h2o/h2o
+  mrb_value proc = mrb_obj_value(mrb_closure_new(state->mrb, code->proc->body.irep));
+  mrb_irep *irep = code->proc->body.irep;
+  irep->iseq[irep->ilen - 1] = MKOP_AB(OP_RETURN, irep->nlocals, OP_R_NORMAL);
+
+  // Run mruby code within fiber
+  mrb_value fiber =
+    mrb_funcall(state->mrb, mrb_obj_value(state->mrb->kernel_module), "_ngx_mruby_prepare_fiber", 1, proc);
+  mrb_result = mrb_funcall(state->mrb, fiber, "call", 0, NULL);
+  // mrb_result = mrb_run(state->mrb, code->proc, mrb_top_self(state->mrb));
+
   if (state->mrb->exc) {
     ngx_mrb_raise_error(state->mrb, mrb_obj_value(state->mrb->exc), r);
     r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
