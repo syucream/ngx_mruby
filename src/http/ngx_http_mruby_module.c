@@ -14,11 +14,14 @@
 #include "ngx_http_mruby_module.h"
 #include "ngx_http_mruby_request.h"
 
+#ifdef NGX_USE_MRUBY_ASYNC
+#include "ngx_http_mruby_async.h"
+#endif
+
 #include <mruby.h>
 #include <mruby/array.h>
 #include <mruby/compile.h>
 #include <mruby/data.h>
-#include <mruby/opcode.h>
 #include <mruby/proc.h>
 #include <mruby/string.h>
 #include <mruby/value.h>
@@ -835,17 +838,21 @@ ngx_int_t ngx_mrb_run(ngx_http_request_t *r, ngx_mrb_state_t *state, ngx_mrb_cod
     }
   }
 
-  // Prepare proc
-  // A part of them refer to https://github.com/h2o/h2o
-  mrb_value proc = mrb_obj_value(mrb_closure_new(state->mrb, code->proc->body.irep));
-  mrb_irep *irep = code->proc->body.irep;
-  irep->iseq[irep->ilen - 1] = MKOP_AB(OP_RETURN, irep->nlocals, OP_R_NORMAL);
+#ifdef NGX_USE_MRUBY_ASYNC
 
-  // Run mruby code within fiber
-  mrb_value fiber =
-    mrb_funcall(state->mrb, mrb_obj_value(state->mrb->kernel_module), "_ngx_mruby_prepare_fiber", 1, proc);
-  mrb_result = mrb_funcall(state->mrb, fiber, "call", 0, NULL);
-  // mrb_result = mrb_run(state->mrb, code->proc, mrb_top_self(state->mrb));
+  mrb_value *fiber = NULL;
+  fiber = (mrb_value *)ngx_palloc(r->pool, sizeof(mrb_value));
+  ngx_mrb_prepare_fiber(state->mrb, code->proc, fiber);
+
+  if (mrb_test(ngx_mrb_run_fiber(state->mrb, fiber, &mrb_result))) {
+    return NGX_AGAIN;
+  }
+
+#else
+
+  mrb_result = mrb_run(state->mrb, code->proc, mrb_top_self(state->mrb));
+
+#endif
 
   if (state->mrb->exc) {
     ngx_mrb_raise_error(state->mrb, mrb_obj_value(state->mrb->exc), r);

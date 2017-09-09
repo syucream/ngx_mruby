@@ -55,7 +55,9 @@ module Kernel
     end
 
     Proc.new do
-      fiber.resume
+      rv = fiber.resume
+      is_alive = fiber.alive?
+      [is_alive, rv]
     end
   end
 end
