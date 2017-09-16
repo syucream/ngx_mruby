@@ -774,6 +774,37 @@ void ngx_http_mruby_read_request_body_cb(ngx_http_request_t *r)
   }
 }
 
+// TODO: Support rputs by multi directive
+ngx_int_t ngx_mrb_finalize_rputs(ngx_http_request_t *r, ngx_http_mruby_ctx_t *ctx)
+{
+  ngx_int_t rc;
+  ngx_mrb_rputs_chain_list_t *chain;
+
+  chain = ctx->rputs_chain;
+  if (chain == NULL) {
+    ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
+                  "%s INFO %s:%d: mrb_run info: rputs_chain is null and return NGX_OK", MODULE_NAME, __func__,
+                  __LINE__);
+    if (r->headers_out.status >= 100) {
+      rc = r->headers_out.status;
+    } else {
+      rc = NGX_OK;
+    }
+  }
+  if (r->headers_out.status == NGX_HTTP_OK || !(*chain->last)->buf->last_buf) {
+    r->headers_out.status = NGX_HTTP_OK;
+    (*chain->last)->buf->last_buf = 1;
+    ngx_http_send_header(r);
+    ngx_http_output_filter(r, chain->out);
+    ngx_http_set_ctx(r, NULL, ngx_http_mruby_module);
+    rc = NGX_OK;
+  } else {
+    rc = r->headers_out.status;
+  }
+
+  return rc;
+}
+
 ngx_int_t ngx_mrb_run(ngx_http_request_t *r, ngx_mrb_state_t *state, ngx_mrb_code_t *code, ngx_flag_t cached,
                       ngx_str_t *result)
 {
@@ -781,7 +812,6 @@ ngx_int_t ngx_mrb_run(ngx_http_request_t *r, ngx_mrb_state_t *state, ngx_mrb_cod
   int ai = 0;
   mrb_value mrb_result;
   ngx_http_mruby_ctx_t *ctx;
-  ngx_mrb_rputs_chain_list_t *chain;
   ngx_http_mruby_loc_conf_t *mlcf = ngx_http_get_module_loc_conf(r, ngx_http_mruby_module);
 
   if (state == NGX_CONF_UNSET_PTR || code == NGX_CONF_UNSET_PTR) {
@@ -839,7 +869,6 @@ ngx_int_t ngx_mrb_run(ngx_http_request_t *r, ngx_mrb_state_t *state, ngx_mrb_cod
   }
 
 #ifdef NGX_USE_MRUBY_ASYNC
-
   mrb_value *fiber = NULL;
   fiber = (mrb_value *)ngx_palloc(r->pool, sizeof(mrb_value));
   ngx_mrb_prepare_fiber(state->mrb, code->proc, fiber);
@@ -847,11 +876,8 @@ ngx_int_t ngx_mrb_run(ngx_http_request_t *r, ngx_mrb_state_t *state, ngx_mrb_cod
   if (mrb_test(ngx_mrb_run_fiber(state->mrb, fiber, &mrb_result))) {
     return NGX_DONE;
   }
-
 #else
-
   mrb_result = mrb_run(state->mrb, code->proc, mrb_top_self(state->mrb));
-
 #endif
 
   if (state->mrb->exc) {
@@ -891,30 +917,10 @@ ngx_int_t ngx_mrb_run(ngx_http_request_t *r, ngx_mrb_state_t *state, ngx_mrb_cod
   }
   ngx_mrb_state_clean(r, state);
 
-  // TODO: Support rputs by multi directive
   if (ngx_http_get_module_ctx(r, ngx_http_mruby_module) != NULL) {
-    chain = ctx->rputs_chain;
-    if (chain == NULL) {
-      ngx_log_error(NGX_LOG_INFO, r->connection->log, 0,
-                    "%s INFO %s:%d: mrb_run info: rputs_chain is null and return NGX_OK", MODULE_NAME, __func__,
-                    __LINE__);
-      if (r->headers_out.status >= 100) {
-        return r->headers_out.status;
-      } else {
-        return NGX_OK;
-      }
-    }
-    if (r->headers_out.status == NGX_HTTP_OK || !(*chain->last)->buf->last_buf) {
-      r->headers_out.status = NGX_HTTP_OK;
-      (*chain->last)->buf->last_buf = 1;
-      ngx_http_send_header(r);
-      ngx_http_output_filter(r, chain->out);
-      ngx_http_set_ctx(r, NULL, ngx_http_mruby_module);
-      return NGX_OK;
-    } else {
-      return r->headers_out.status;
-    }
+    return ngx_mrb_finalize_rputs(r, ctx);
   }
+
   return NGX_OK;
 }
 
