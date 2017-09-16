@@ -5,6 +5,7 @@
 */
 
 #include "ngx_http_mruby_async.h"
+#include "ngx_http_mruby_core.h"
 #include "ngx_http_mruby_request.h"
 
 #include <nginx.h>
@@ -21,18 +22,23 @@ typedef struct {
   ngx_http_request_t *r;
 } ngx_mrb_reentrant_t;
 
-void ngx_mrb_prepare_fiber(mrb_state *mrb, struct RProc* rproc, mrb_value *fiber)
+mrb_value ngx_mrb_start_fiber(ngx_http_request_t *r, mrb_state *mrb, struct RProc *rproc, mrb_value *result)
 {
-  mrb_value proc = mrb_nil_value();
-  mrb_irep *irep = NULL;
+  mrb_value proc;
+  mrb_irep *irep;
+  mrb_value *fiber;
 
   proc = mrb_obj_value(mrb_closure_new(mrb, rproc->body.irep));
 
   // A part of them refer to https://github.com/h2o/h2o
+  // Replace OP_STOP with OP_RETURN to avoid stop VM
   irep = rproc->body.irep;
   irep->iseq[irep->ilen - 1] = MKOP_AB(OP_RETURN, irep->nlocals, OP_R_NORMAL);
 
+  fiber = (mrb_value *)ngx_palloc(r->pool, sizeof(mrb_value));
   *fiber = mrb_funcall(mrb, mrb_obj_value(mrb->kernel_module), "_ngx_mruby_prepare_fiber", 1, proc);
+
+  return ngx_mrb_run_fiber(mrb, fiber, result);
 }
 
 mrb_value ngx_mrb_run_fiber(mrb_state *mrb, mrb_value *fiber, mrb_value *result)
@@ -63,6 +69,7 @@ static void ngx_mrb_timer_handler(ngx_event_t *ev)
 {
   mrb_value is_alive;
   ngx_mrb_reentrant_t *re;
+  ngx_http_mruby_ctx_t *ctx;
   
   re = ev->data;
 
@@ -74,20 +81,12 @@ static void ngx_mrb_timer_handler(ngx_event_t *ev)
     }
   }
 
-  // XXX Integrate to ngx_mrb_run() !!!!
-  // ... and I should handle errors!
-  ngx_mrb_rputs_chain_list_t *chain;
-  if (ngx_http_get_module_ctx(re->r, ngx_http_mruby_module) != NULL) {
-    ngx_http_mruby_ctx_t *ctx;
-    ctx = ngx_http_get_module_ctx(re->r, ngx_http_mruby_module);
-    chain = ctx->rputs_chain;
-    if (re->r->headers_out.status == NGX_HTTP_OK || !(*chain->last)->buf->last_buf) {
-      re->r->headers_out.status = NGX_HTTP_OK;
-      (*chain->last)->buf->last_buf = 1;
-      ngx_http_send_header(re->r);
-      ngx_http_output_filter(re->r, chain->out);
-      ngx_http_set_ctx(re->r, NULL, ngx_http_mruby_module);
-    }
+  // TODO exp
+
+  // TODO err
+  ctx = ngx_http_get_module_ctx(re->r, ngx_http_mruby_module);
+  if (ctx != NULL) {
+    ngx_mrb_finalize_rputs(re->r, ctx);
   }
 
   // progress to a next handler
