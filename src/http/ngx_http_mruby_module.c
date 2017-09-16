@@ -845,7 +845,7 @@ ngx_int_t ngx_mrb_run(ngx_http_request_t *r, ngx_mrb_state_t *state, ngx_mrb_cod
   ngx_mrb_prepare_fiber(state->mrb, code->proc, fiber);
 
   if (mrb_test(ngx_mrb_run_fiber(state->mrb, fiber, &mrb_result))) {
-    return NGX_AGAIN;
+    return NGX_DONE;
   }
 
 #else
