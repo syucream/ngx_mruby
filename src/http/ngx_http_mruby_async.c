@@ -70,7 +70,7 @@ static void ngx_mrb_timer_handler(ngx_event_t *ev)
   ngx_mrb_reentrant_t *re;
   ngx_http_mruby_ctx_t *ctx;
   ngx_int_t rc = NGX_OK;
-  
+
   re = ev->data;
 
   if (re->fiber != NULL) {
