@@ -67,31 +67,40 @@ mrb_value ngx_mrb_run_fiber(mrb_state *mrb, mrb_value *fiber, mrb_value *result)
 
 static void ngx_mrb_timer_handler(ngx_event_t *ev)
 {
-  mrb_value is_alive;
   ngx_mrb_reentrant_t *re;
   ngx_http_mruby_ctx_t *ctx;
+  ngx_int_t rc = NGX_OK;
   
   re = ev->data;
 
   if (re->fiber != NULL) {
     ngx_mrb_push_request(re->r);
-    is_alive = ngx_mrb_run_fiber(re->mrb, re->fiber, NULL);
-    if (!mrb_test(is_alive)) {
+    if (!mrb_test(ngx_mrb_run_fiber(re->mrb, re->fiber, NULL))) {
       re->fiber = NULL;
+    }
+    if (re->mrb->exc) {
+      ngx_mrb_raise_error(re->mrb, mrb_obj_value(re->mrb->exc), re->r);
+      rc = NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
   }
 
-  // TODO exp
-
-  // TODO err
   ctx = ngx_http_get_module_ctx(re->r, ngx_http_mruby_module);
   if (ctx != NULL) {
-    ngx_mrb_finalize_rputs(re->r, ctx);
+    if (rc != NGX_OK) {
+      re->r->headers_out.status = NGX_HTTP_INTERNAL_SERVER_ERROR;
+    }
+    rc = ngx_mrb_finalize_rputs(re->r, ctx);
+  } else {
+    rc = NGX_ERROR;
   }
 
-  // progress to a next handler
-  re->r->phase_handler++;
-  ngx_http_core_run_phases(re->r);
+  // progress to a next handler or finalize
+  if (rc == NGX_OK) {
+    re->r->phase_handler++;
+    ngx_http_core_run_phases(re->r);
+  } else {
+    ngx_http_finalize_request(re->r, rc);
+  }
 }
 
 static mrb_value ngx_mrb_async_sleep(mrb_state *mrb, mrb_value self)
@@ -116,11 +125,11 @@ static mrb_value ngx_mrb_async_sleep(mrb_state *mrb, mrb_value self)
   re->r = r;
 
   ev = (ngx_event_t *)p;
+  ngx_memzero(ev, sizeof(ngx_event_t));
   ev->handler = ngx_mrb_timer_handler;
   ev->data = re;
   ev->log = ngx_cycle->log;
 
-  // TODO Maybe set cleanup handler ...
   ngx_add_timer(ev, (ngx_msec_t)timer);
 
   return self;
