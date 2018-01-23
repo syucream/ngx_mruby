@@ -47,10 +47,11 @@ mrb_value ngx_mrb_start_fiber(ngx_http_request_t *r, mrb_state *mrb, struct RPro
   mrb_value *fiber;
 
   replace_stop(rproc->body.irep);
-  proc = mrb_obj_value(mrb_closure_new(mrb, rproc->body.irep));
+  proc = mrb_obj_value(mrb_proc_new(mrb, rproc->body.irep));
 
   fiber = (mrb_value *)ngx_palloc(r->pool, sizeof(mrb_value));
-  *fiber = mrb_funcall(mrb, mrb_obj_value(mrb->kernel_module), "_ngx_mruby_prepare_fiber", 1, proc);
+  mrb_value fiber_class = mrb_obj_value(mrb_class_get(mrb, "Fiber"));
+  *fiber = mrb_funcall_with_block(mrb, fiber_class, mrb_intern_cstr(mrb, "new"), 0, NULL, proc);
 
   return ngx_mrb_run_fiber(mrb, fiber, result);
 }
@@ -63,11 +64,11 @@ mrb_value ngx_mrb_run_fiber(mrb_state *mrb, mrb_value *fiber, mrb_value *result)
   mrb->ud = fiber;
 
   // TODO support passing arguments.
-  resume_results = mrb_funcall(mrb, *fiber, "call", 0, NULL);
+  resume_results = mrb_fiber_resume(mrb, *fiber, 0, NULL);
 
-  is_alive = mrb_ary_entry(resume_results, 0);
+  is_alive = mrb_funcall(mrb, *fiber, "is_alive?", 0, NULL);
   if (result != NULL) {
-    *result = mrb_ary_entry(resume_results, 1);
+    *result = resume_results;
   }
 
   if (mrb_test(is_alive)) {
